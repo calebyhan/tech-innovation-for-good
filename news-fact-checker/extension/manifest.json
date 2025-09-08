@@ -1,17 +1,33 @@
 {
   "manifest_version": 3,
-  "name": "News Fact Checker (MVP)",
-  "version": "0.1.0",
-  "description": "Detects news pages, checks claims across sources, and shows consensus truth.",
-  "permissions": ["storage", "activeTab", "scripting"],
-  "host_permissions": ["https://*/*", "http://*/*"],
-  "background": { "service_worker": "service_worker.js" },
+  "name": "News Fact Checker",
+  "version": "2.0.0",
+  "description": "Automatically fact-check news articles using AI and multiple sources",
+  
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "News Fact Checker"
+  },
+  
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  
   "content_scripts": [
     {
-      "matches": ["https://*/*", "http://*/*"],
+      "matches": ["<all_urls>"],
       "js": ["content.js"],
       "css": ["overlay.css"],
       "run_at": "document_idle"
     }
+  ],
+  
+  "host_permissions": [
+    "http://localhost:3000/*"
   ]
 }

@@ -230,3 +230,248 @@
 .fact-check-toggle.hidden {
   display: none;
 }
+
+/* Real-time streaming styles */
+.fact-check-sections {
+  margin-top: 10px;
+}
+
+.fact-check-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  margin-bottom: 15px;
+}
+
+.status-text {
+  margin-left: 10px;
+  color: #495057;
+  font-weight: 500;
+}
+
+.claim-progress {
+  font-size: 10px;
+  color: #6c757d;
+  margin-top: 4px;
+  text-align: right;
+}
+
+.claims-container,
+.sources-container {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.claim-item {
+  transition: all 0.3s ease;
+  margin-bottom: 10px;
+}
+
+.claim-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.consensus-stats {
+  font-size: 12px;
+  color: #6c757d;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e9ecef;
+}
+
+/* Verdict-specific styling */
+.claim-item[data-verdict="strongly_supported"] {
+  border-left: 4px solid #28a745;
+  background: #f8fff9;
+}
+
+.claim-item[data-verdict="supported"] {
+  border-left: 4px solid #28a745;
+  background: #f8fff9;
+}
+
+.claim-item[data-verdict="weakly_supported"] {
+  border-left: 4px solid #17a2b8;
+  background: #f6fdff;
+}
+
+.claim-item[data-verdict="contested"] {
+  border-left: 4px solid #ffc107;
+  background: #fffdf7;
+}
+
+.claim-item[data-verdict="insufficient_evidence"] {
+  border-left: 4px solid #6c757d;
+  background: #f8f9fa;
+}
+
+.claim-item[data-verdict="likely_false"] {
+  border-left: 4px solid #dc3545;
+  background: #fff8f8;
+}
+
+.claim-item[data-verdict="refuted"] {
+  border-left: 4px solid #dc3545;
+  background: #fff8f8;
+}
+
+.claim-item[data-verdict="weakly_refuted"] {
+  border-left: 4px solid #fd7e14;
+  background: #fff9f5;
+}
+
+/* Animate new claims */
+@keyframes slideInUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.claim-item.new {
+  animation: slideInUp 0.5s ease-out;
+}
+
+/* Claim highlighting and interaction styles */
+.claim-item {
+  position: relative;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.claim-item:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.claim-item:active {
+  transform: translateY(0);
+}
+
+.claim-highlight-hint {
+  margin-left: 8px;
+  opacity: 0.6;
+  font-size: 12px;
+  transition: opacity 0.2s ease;
+}
+
+.claim-item:hover .claim-highlight-hint {
+  opacity: 1;
+}
+
+/* Highlight animation in article */
+@keyframes claimHighlight {
+  0% {
+    background: rgba(255, 193, 7, 0.1);
+    transform: scale(1);
+  }
+  20% {
+    background: rgba(255, 193, 7, 0.4);
+    transform: scale(1.02);
+  }
+  40% {
+    background: rgba(255, 193, 7, 0.3);
+  }
+  60% {
+    background: rgba(255, 193, 7, 0.2);
+  }
+  100% {
+    background: rgba(255, 193, 7, 0.1);
+    transform: scale(1);
+  }
+}
+
+.fact-check-highlight-wrapper {
+  scroll-margin-top: 100px;
+  position: relative;
+}
+
+.fact-check-highlight-wrapper:not(.persistent) {
+  animation: claimHighlight 2s ease-in-out;
+}
+
+/* Persistent highlight styles */
+.fact-check-highlight-wrapper.persistent {
+  background: linear-gradient(45deg, rgba(255, 193, 7, 0.3), rgba(255, 193, 7, 0.1)) !important;
+  border-left: 4px solid #ffc107 !important;
+  animation: none;
+}
+
+/* Sources panel styles */
+.fact-check-sources-panel {
+  max-width: 400px;
+  z-index: 999;
+}
+
+@media (max-width: 768px) {
+  .fact-check-sources-panel {
+    max-width: 90vw;
+  }
+}
+
+@keyframes slideInPanel {
+  0% {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Close button for persistent highlights */
+.fact-check-close-highlight {
+  transition: all 0.2s ease;
+}
+
+.fact-check-close-highlight:hover {
+  background: rgba(0, 0, 0, 0.2) !important;
+  transform: scale(1.1);
+}
+
+/* Not found message animation */
+@keyframes fadeInOut {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-10px);
+  }
+  20% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  80% {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-10px);
+  }
+}
+
+.claim-not-found-message {
+  animation: fadeInOut 2s ease-in-out;
+}
+
+/* Improved click feedback */
+.claim-item {
+  user-select: none;
+}
+
+.claim-item:active {
+  transform: scale(0.98);
+}
+
+/* Smooth scrolling enhancement */
+html {
+  scroll-behavior: smooth;
+}

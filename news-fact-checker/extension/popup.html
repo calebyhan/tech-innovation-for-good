@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {
+            width: 320px;
+            padding: 16px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+        }
+        
+        .header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 16px;
+            border-bottom: 1px solid #e1e5e9;
+            padding-bottom: 12px;
+        }
+        
+        .logo {
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 6px;
+            margin-right: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        
+        .title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+        
+        .toggle-section {
+            margin-bottom: 16px;
+        }
+        
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .toggle-label {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .toggle-description {
+            font-size: 12px;
+            color: #666;
+            margin-top: 2px;
+        }
+        
+        .toggle-switch {
+            position: relative;
+            width: 48px;
+            height: 24px;
+            background: #ccc;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        .toggle-switch.active {
+            background: #4CAF50;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.3s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .toggle-switch.active .toggle-slider {
+            transform: translateX(24px);
+        }
+        
+        .status-section {
+            padding: 12px;
+            background: #f0f7ff;
+            border-radius: 8px;
+            border: 1px solid #b3d9ff;
+            margin-bottom: 16px;
+        }
+        
+        .status-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #0066cc;
+            margin-bottom: 4px;
+        }
+        
+        .status-text {
+            font-size: 12px;
+            color: #333;
+            line-height: 1.4;
+        }
+        
+        .page-info {
+            background: #fff;
+            border: 1px solid #e1e5e9;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .page-type {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 4px;
+        }
+        
+        .page-url {
+            font-size: 11px;
+            color: #999;
+            word-break: break-all;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        
+        .btn {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #e1e5e9;
+            border-radius: 6px;
+            background: white;
+            color: #333;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn:hover {
+            background: #f8f9fa;
+        }
+        
+        .btn.primary {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+        
+        .btn.primary:hover {
+            background: #0056b3;
+        }
+        
+        .version {
+            text-align: center;
+            font-size: 10px;
+            color: #999;
+            margin-top: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">FC</div>
+        <div class="title">News Fact Checker</div>
+    </div>
+    
+    <div class="toggle-section">
+        <div class="toggle-container">
+            <div>
+                <div class="toggle-label">Auto-Check News Articles</div>
+                <div class="toggle-description">Automatically analyze news content</div>
+            </div>
+            <div class="toggle-switch" id="factCheckToggle">
+                <div class="toggle-slider"></div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="status-section" id="statusSection">
+        <div class="status-title">Current Page Status</div>
+        <div class="status-text" id="statusText">Loading...</div>
+    </div>
+    
+    <div class="page-info" id="pageInfo" style="display: none;">
+        <div class="page-type" id="pageType"></div>
+        <div class="page-url" id="pageUrl"></div>
+    </div>
+    
+    <div class="action-buttons">
+        <button class="btn" id="analyzeBtn">Analyze This Page</button>
+        <button class="btn" id="settingsBtn">Settings</button>
+    </div>
+    
+    <div class="version">v2.0.0</div>
+    
+    <script src="popup.js"></script>
+</body>
+</html>
