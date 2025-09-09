@@ -2,6 +2,8 @@
 
 An intelligent Chrome extension that automatically detects news articles and provides real-time fact-checking through AI-powered analysis. The extension mines factual claims from news content, cross-references them with multiple sources, and displays consensus-based truth assessments using advanced Natural Language Processing.
 
+Devpost: https://devpost.com/software/news-fact-checker
+
 ## 🌟 Key Features
 
 - **Smart News Detection**: Automatically identifies news articles using URL patterns, content analysis, and metadata
