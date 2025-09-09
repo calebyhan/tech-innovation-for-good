@@ -6,11 +6,32 @@ const natural = require('natural');
 const nlp = require('compromise');
 require('dotenv').config();
 
+// Configure axios with connection pooling
+const { Agent } = require('https');
+const httpsAgent = new Agent({
+  maxSockets: 10,
+  keepAlive: true,
+  keepAliveMsecs: 30000
+});
+
+axios.defaults.httpsAgent = httpsAgent;
+axios.defaults.timeout = 8000;
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Initialize Hugging Face client
+// Initialize Hugging Face client with timeout configuration
 const hf = new HfInference(process.env.HF_TOKEN);
+
+// Performance optimizations
+const NLI_CACHE = new Map();
+const API_CACHE = new Map();
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const MAX_CACHE_SIZE = 1000;
+
+// Batch processing configuration
+const MAX_CONCURRENT_NLI = 3;
+const MAX_CONCURRENT_API = 2;
 
 // Check if HF token is configured
 if (!process.env.HF_TOKEN) {
@@ -23,7 +44,13 @@ app.use(express.json());
 
 // Configuration
 const NEWS_API_KEY = process.env.NEWS_API_KEY;
+const NEWS_API_KEY_1 = process.env.NEWS_API_KEY_1; // Backup API key
 const NEWS_SEARCH_URL = 'https://newsapi.org/v2/everything';
+
+// Track which API key to use and rate limit status
+let currentApiKeyIndex = 0;
+const apiKeys = [NEWS_API_KEY, NEWS_API_KEY_1].filter(Boolean); // Filter out undefined keys
+let rateLimitedKeys = new Set(); // Track which keys are rate limited
 
 // Enhanced Helper Functions
 
@@ -31,7 +58,9 @@ const NEWS_SEARCH_URL = 'https://newsapi.org/v2/everything';
  * Extract factual claims using improved heuristics and NLP
  */
 function extractFactualClaims(text, k = 10) {
-  const doc = nlp(text);
+  // Pre-filter text to reduce processing overhead
+  const cleanedText = text.slice(0, 10000); // Limit text length
+  const doc = nlp(cleanedText);
   const sentences = doc.sentences().out('array');
   
   // Enhanced filtering and scoring with better non-relevant content detection
@@ -220,10 +249,60 @@ function buildSearchQueries(claim, entities) {
 }
 
 /**
- * Enhanced news search with multiple queries and rate limiting
+ * Get the next available API key that isn't rate limited
+ */
+function getAvailableApiKey() {
+  if (apiKeys.length === 0) {
+    return null;
+  }
+  
+  // If all keys are rate limited, reset the tracking (they might have recovered)
+  if (rateLimitedKeys.size === apiKeys.length) {
+    console.log('All API keys were rate limited, resetting status...');
+    rateLimitedKeys.clear();
+  }
+  
+  // Find next available key
+  for (let i = 0; i < apiKeys.length; i++) {
+    const keyIndex = (currentApiKeyIndex + i) % apiKeys.length;
+    const key = apiKeys[keyIndex];
+    
+    if (!rateLimitedKeys.has(key)) {
+      currentApiKeyIndex = keyIndex;
+      return key;
+    }
+  }
+  
+  // Fallback to first key if somehow no keys are available
+  return apiKeys[0];
+}
+
+/**
+ * Mark an API key as rate limited
+ */
+function markApiKeyRateLimited(apiKey) {
+  rateLimitedKeys.add(apiKey);
+  console.log(`API key ending in ...${apiKey.slice(-4)} marked as rate limited. Available keys: ${apiKeys.length - rateLimitedKeys.size}`);
+  
+  // Switch to next available key
+  currentApiKeyIndex = (currentApiKeyIndex + 1) % apiKeys.length;
+}
+
+/**
+ * Enhanced news search with caching and parallel processing
  */
 async function searchNewsEnhanced(queries, n = 10) {
-  if (!NEWS_API_KEY) {
+  // Check cache first
+  const cacheKey = queries.sort().join('|');
+  if (API_CACHE.has(cacheKey)) {
+    const cached = API_CACHE.get(cacheKey);
+    if (Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log('Using cached API results');
+      return cached.result;
+    }
+    API_CACHE.delete(cacheKey);
+  }
+  if (apiKeys.length === 0) {
     console.log('No NEWS_API_KEY provided, returning mock sources');
     return getMockSources();
   }
@@ -232,49 +311,80 @@ async function searchNewsEnhanced(queries, n = 10) {
   const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
   
   for (const query of queries) {
-    try {
-      console.log('Searching news for query:', query);
+    let success = false;
+    let lastError = null;
+    
+    // Try each available API key
+    for (let attempt = 0; attempt < apiKeys.length && !success; attempt++) {
+      const currentApiKey = getAvailableApiKey();
       
-      const response = await axios.get(NEWS_SEARCH_URL, {
-        params: {
-          q: query,
-          pageSize: Math.ceil(n / queries.length) + 2,
-          sortBy: 'relevancy',
-          language: 'en',
-          apiKey: NEWS_API_KEY
-        },
-        timeout: 10000
-      });
-      
-      if (response.status === 200 && response.data.articles) {
-        response.data.articles.forEach(article => {
-          if (!allArticles.has(article.url)) {
-            allArticles.set(article.url, {
-              title: article.title,
-              url: article.url,
-              publisher: article.source?.name,
-              description: article.description,
-              publishedAt: article.publishedAt,
-              content: article.content
-            });
-          }
-        });
-      }
-      
-      // Add delay between requests to avoid rate limiting
-      if (queries.indexOf(query) < queries.length - 1) {
-        await delay(500); // 500ms delay between requests
-      }
-      
-    } catch (error) {
-      if (error.response?.status === 429) {
-        console.error(`Rate limit exceeded for query "${query}". Switching to mock sources.`);
-        console.log('Consider upgrading your News API plan or reducing request frequency.');
-        // Return mock sources if we hit rate limit
+      if (!currentApiKey) {
+        console.log('No available API keys, using mock sources');
         return getMockSources();
-      } else {
-        console.error(`News search error for query "${query}":`, error.message);
       }
+      
+      try {
+        console.log(`Searching news for query: "${query}" with API key ending in ...${currentApiKey.slice(-4)}`);
+        
+        const response = await axios.get(NEWS_SEARCH_URL, {
+          params: {
+            q: query,
+            pageSize: Math.ceil(n / queries.length) + 2,
+            sortBy: 'relevancy',
+            language: 'en',
+            apiKey: currentApiKey
+          },
+          timeout: 8000
+        });
+        
+        if (response.status === 200 && response.data.articles) {
+          response.data.articles.forEach(article => {
+            if (!allArticles.has(article.url)) {
+              allArticles.set(article.url, {
+                title: article.title,
+                url: article.url,
+                publisher: article.source?.name,
+                description: article.description,
+                publishedAt: article.publishedAt,
+                content: article.content
+              });
+            }
+          });
+          success = true;
+          console.log(`Successfully retrieved ${response.data.articles.length} articles for query: "${query}"`);
+        }
+        
+      } catch (error) {
+        lastError = error;
+        
+        if (error.response?.status === 429) {
+          console.error(`Rate limit exceeded for API key ending in ...${currentApiKey.slice(-4)} on query "${query}"`);
+          markApiKeyRateLimited(currentApiKey);
+          
+          // If we have more keys available, try the next one
+          if (rateLimitedKeys.size < apiKeys.length) {
+            console.log(`Trying next available API key...`);
+            continue;
+          } else {
+            console.log('All API keys rate limited, switching to mock sources');
+            return getMockSources();
+          }
+        } else {
+          console.error(`News search error for query "${query}":`, error.message);
+          // For non-rate-limit errors, don't mark the key as bad, just continue
+          break;
+        }
+      }
+    }
+    
+    // If we couldn't get results for this query with any key, log it but continue
+    if (!success) {
+      console.log(`Failed to get results for query "${query}" with all available API keys`);
+    }
+    
+    // Reduced delay between requests for better performance
+    if (queries.indexOf(query) < queries.length - 1) {
+      await delay(200); // 200ms delay between requests
     }
   }
   
@@ -283,7 +393,7 @@ async function searchNewsEnhanced(queries, n = 10) {
   
   // If we got no articles due to rate limiting, return mock sources
   if (articles.length === 0) {
-    console.log('No articles found, using mock sources as fallback');
+    console.log('No articles found with any API key, using mock sources as fallback');
     return getMockSources();
   }
   
@@ -300,7 +410,21 @@ async function searchNewsEnhanced(queries, n = 10) {
     return new Date(b.publishedAt || 0) - new Date(a.publishedAt || 0);
   });
   
-  return articles.slice(0, n);
+  console.log(`Successfully retrieved ${articles.length} unique articles from ${allArticles.size} total results`);
+  
+  const result = articles.slice(0, n);
+  
+  // Cache the result
+  if (API_CACHE.size >= MAX_CACHE_SIZE) {
+    const oldestKey = API_CACHE.keys().next().value;
+    API_CACHE.delete(oldestKey);
+  }
+  API_CACHE.set(cacheKey, {
+    result: result,
+    timestamp: Date.now()
+  });
+  
+  return result;
 }
 
 /**
@@ -495,9 +619,20 @@ async function performEnhancedNLI(evidence, claim) {
     const truncatedEvidence = evidence.slice(0, 500);
     const truncatedClaim = claim.slice(0, 200);
     
-    // Create a more specific hypothesis
+    // Check cache first
+    const cacheKey = `${truncatedEvidence}||${truncatedClaim}`;
+    if (NLI_CACHE.has(cacheKey)) {
+      const cached = NLI_CACHE.get(cacheKey);
+      if (Date.now() - cached.timestamp < CACHE_TTL) {
+        console.log('Using cached NLI result');
+        return cached.result;
+      }
+      NLI_CACHE.delete(cacheKey);
+    }
+    
+    // Create a more specific hypothesis with reduced timeout
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('NLI timeout')), 10000)
+      setTimeout(() => reject(new Error('NLI timeout')), 5000)
     );
     
     const nliPromise = hf.zeroShotClassification({
@@ -540,6 +675,18 @@ async function performEnhancedNLI(evidence, claim) {
     }
     
     console.log('NLI scores:', nliScores);
+    
+    // Cache the result
+    if (NLI_CACHE.size >= MAX_CACHE_SIZE) {
+      // Remove oldest entries
+      const oldestKey = NLI_CACHE.keys().next().value;
+      NLI_CACHE.delete(oldestKey);
+    }
+    NLI_CACHE.set(cacheKey, {
+      result: nliScores,
+      timestamp: Date.now()
+    });
+    
     return nliScores;
     
   } catch (error) {
@@ -744,7 +891,7 @@ function isMetadata(sentence) {
 // Streaming analysis endpoint for real-time updates
 app.post('/analyze-stream', async (req, res) => {
   try {
-    const { url, title, text } = req.body;
+    const { text } = req.body;
     
     // Set headers for Server-Sent Events
     res.writeHead(200, {
@@ -840,57 +987,75 @@ app.post('/analyze-stream', async (req, res) => {
       return parts.join('. ').trim();
     }).filter(text => text.length > 30);
     
-    // 4. Process each claim individually and stream results
+    // 4. Process claims with parallel processing and stream results
     const resultClaims = [];
     
-    for (let i = 0; i < claimsWithEntities.length; i++) {
-      const claim = claimsWithEntities[i];
+    // Process claims in smaller batches for streaming
+    const batchSize = 2;
+    for (let i = 0; i < claimsWithEntities.length; i += batchSize) {
+      const batch = claimsWithEntities.slice(i, i + batchSize);
       
       res.write(`data: ${JSON.stringify({
         type: 'status',
-        message: `Analyzing claim ${i + 1} of ${claimsWithEntities.length}...`
+        message: `Analyzing claims ${i + 1}-${Math.min(i + batchSize, claimsWithEntities.length)} of ${claimsWithEntities.length}...`
       })}\n\n`);
       
-      const nliScores = [];
-      
-      for (const evidence of evidenceTexts.slice(0, 8)) {
-        try {
-          const nliResult = await performEnhancedNLI(evidence, claim.text);
-          nliScores.push(nliResult);
-        } catch (error) {
-          console.error('NLI error for evidence:', error.message);
-          nliScores.push({ entail: 0.0, contra: 0.0, neutral: 1.0 });
+      // Process batch in parallel
+      const batchPromises = batch.map(async (claim, batchIndex) => {
+        const nliScores = [];
+        
+        // Process NLI calls for this claim in parallel with limited concurrency
+        const nliPromises = evidenceTexts.slice(0, 8).map(async (evidence) => {
+          try {
+            return await performEnhancedNLI(evidence, claim.text);
+          } catch (error) {
+            console.error('NLI error for evidence:', error.message);
+            return { entail: 0.0, contra: 0.0, neutral: 1.0 };
+          }
+        });
+        
+        // Execute in batches of 3 to avoid overwhelming the API
+        const results = [];
+        for (let j = 0; j < nliPromises.length; j += 3) {
+          const nliBatch = nliPromises.slice(j, j + 3);
+          const batchResults = await Promise.all(nliBatch);
+          results.push(...batchResults);
         }
-      }
+        
+        nliScores.push(...results);
+        const consensus = calculateWeightedConsensus(nliScores, sources.slice(0, 8));
+        const avgEntail = nliScores.reduce((sum, s) => sum + s.entail, 0) / nliScores.length;
+        const avgContra = nliScores.reduce((sum, s) => sum + s.contra, 0) / nliScores.length;
+        
+        return {
+          text: claim.text,
+          confidence_score: claim.score,
+          entail_score: avgEntail,
+          contra_score: avgContra,
+          consensus: consensus,
+          entities: claim.entities,
+          confidence: claim.score.toFixed(2),
+          support: avgEntail.toFixed(2),
+          contradiction: avgContra.toFixed(2),
+          verdict: consensus,
+          originalIndex: i + batchIndex
+        };
+      });
       
-      const consensus = calculateWeightedConsensus(nliScores, sources.slice(0, 8));
-      const avgEntail = nliScores.reduce((sum, s) => sum + s.entail, 0) / nliScores.length;
-      const avgContra = nliScores.reduce((sum, s) => sum + s.contra, 0) / nliScores.length;
+      const batchResults = await Promise.all(batchPromises);
+      resultClaims.push(...batchResults);
       
-      const processedClaim = {
-        text: claim.text,
-        confidence_score: claim.score,
-        entail_score: avgEntail,
-        contra_score: avgContra,
-        consensus: consensus,
-        entities: claim.entities,
-        confidence: claim.score.toFixed(2),
-        support: avgEntail.toFixed(2),
-        contradiction: avgContra.toFixed(2),
-        verdict: consensus
-      };
-      
-      resultClaims.push(processedClaim);
-      
-      // Stream this claim result immediately
-      res.write(`data: ${JSON.stringify({
-        type: 'claim_result',
-        data: {
-          claim: processedClaim,
-          index: i,
-          total: claimsWithEntities.length
-        }
-      })}\n\n`);
+      // Stream each result immediately
+      batchResults.forEach((processedClaim) => {
+        res.write(`data: ${JSON.stringify({
+          type: 'claim_result',
+          data: {
+            claim: processedClaim,
+            index: processedClaim.originalIndex,
+            total: claimsWithEntities.length
+          }
+        })}\n\n`);
+      });
     }
     
     // Generate final consensus
@@ -959,7 +1124,7 @@ app.post('/analyze-stream', async (req, res) => {
 // Main analysis endpoint
 app.post('/analyze', async (req, res) => {
   try {
-    const { url, title, text } = req.body;
+    const { text } = req.body;
     
     // 1. Page type detection
     const pageType = await classifyPageType(text);
@@ -1001,54 +1166,8 @@ app.post('/analyze', async (req, res) => {
       return parts.join('. ').trim();
     }).filter(text => text.length > 30);
     
-    // 5. Score each claim against evidence with enhanced NLI and source tracking
-    const resultClaims = [];
-    
-    for (const claim of claimsWithEntities) {
-      console.log(`Processing claim: ${claim.text.slice(0, 100)}...`);
-      const nliScores = [];
-      const relevantSources = [];
-      
-      // Score against each piece of evidence and track which sources are most relevant
-      for (let i = 0; i < evidenceTexts.slice(0, 8).length; i++) {
-        const evidence = evidenceTexts[i];
-        const source = sources[i];
-        
-        try {
-          const nliResult = await performEnhancedNLI(evidence, claim.text);
-          nliScores.push(nliResult);
-          
-          // Track source relevance based on NLI scores and text similarity
-          const sourceRelevance = calculateSourceRelevance(claim, source, evidence, nliResult);
-          if (sourceRelevance.score > 0.3) {
-            relevantSources.push({
-              ...source,
-              relevanceScore: sourceRelevance.score,
-              matchType: sourceRelevance.matchType,
-              evidence: evidence.slice(0, 200)
-            });
-          }
-        } catch (error) {
-          console.error('NLI error for evidence:', error.message);
-          nliScores.push({ entail: 0.0, contra: 0.0, neutral: 1.0 });
-        }
-      }
-      
-      const consensus = calculateWeightedConsensus(nliScores, sources.slice(0, 8));
-      
-      const avgEntail = nliScores.reduce((sum, s) => sum + s.entail, 0) / nliScores.length;
-      const avgContra = nliScores.reduce((sum, s) => sum + s.contra, 0) / nliScores.length;
-      
-      resultClaims.push({
-        text: claim.text,
-        confidence_score: claim.score,
-        entail_score: avgEntail,
-        contra_score: avgContra,
-        consensus: consensus,
-        entities: claim.entities,
-        relevant_sources: relevantSources.sort((a, b) => b.relevanceScore - a.relevanceScore).slice(0, 4)
-      });
-    }
+    // 5. Score claims with parallel processing for better performance
+    const resultClaims = await processClaimsInParallel(claimsWithEntities, evidenceTexts, sources);
     
     // 6. Generate improved consensus summary
     const stronglySupported = resultClaims.filter(c => c.consensus === 'strongly_supported');
@@ -1116,6 +1235,78 @@ app.post('/analyze', async (req, res) => {
 });
 
 /**
+ * Process claims in parallel for better performance
+ */
+async function processClaimsInParallel(claimsWithEntities, evidenceTexts, sources) {
+  
+  const processClaim = async (claim) => {
+    console.log(`Processing claim: ${claim.text.slice(0, 100)}...`);
+    const nliScores = [];
+    const relevantSources = [];
+    
+    // Limit concurrent NLI calls
+    const nliPromises = evidenceTexts.slice(0, 8).map(async (evidence, i) => {
+      const source = sources[i];
+      
+      try {
+        const nliResult = await performEnhancedNLI(evidence, claim.text);
+        
+        // Track source relevance based on NLI scores and text similarity
+        const sourceRelevance = calculateSourceRelevance(claim, source, evidence, nliResult);
+        if (sourceRelevance.score > 0.3) {
+          relevantSources.push({
+            ...source,
+            relevanceScore: sourceRelevance.score,
+            matchType: sourceRelevance.matchType,
+            evidence: evidence.slice(0, 200)
+          });
+        }
+        
+        return nliResult;
+      } catch (error) {
+        console.error('NLI error for evidence:', error.message);
+        return { entail: 0.0, contra: 0.0, neutral: 1.0 };
+      }
+    });
+    
+    // Process in batches to avoid overwhelming the API
+    const results = [];
+    for (let i = 0; i < nliPromises.length; i += MAX_CONCURRENT_NLI) {
+      const batch = nliPromises.slice(i, i + MAX_CONCURRENT_NLI);
+      const batchResults = await Promise.all(batch);
+      results.push(...batchResults);
+    }
+    
+    nliScores.push(...results);
+    const consensus = calculateWeightedConsensus(nliScores, sources.slice(0, 8));
+    
+    const avgEntail = nliScores.reduce((sum, s) => sum + s.entail, 0) / nliScores.length;
+    const avgContra = nliScores.reduce((sum, s) => sum + s.contra, 0) / nliScores.length;
+    
+    return {
+      text: claim.text,
+      confidence_score: claim.score,
+      entail_score: avgEntail,
+      contra_score: avgContra,
+      consensus: consensus,
+      entities: claim.entities,
+      relevant_sources: relevantSources.sort((a, b) => b.relevanceScore - a.relevanceScore).slice(0, 4)
+    };
+  };
+  
+  // Process claims with limited concurrency
+  const results = [];
+  for (let i = 0; i < claimsWithEntities.length; i += MAX_CONCURRENT_API) {
+    const batch = claimsWithEntities.slice(i, i + MAX_CONCURRENT_API);
+    const batchPromises = batch.map(processClaim);
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
+  }
+  
+  return results;
+}
+
+/**
  * Calculate overall credibility score for the article
  */
 function calculateCredibilityScore(claims) {
@@ -1149,9 +1340,9 @@ async function classifyPageType(text) {
   try {
     const labels = ['news article', 'opinion piece', 'blog post', 'research report', 'fact sheet', 'advertisement'];
     
-    // Add timeout wrapper
+    // Add shorter timeout for page classification
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Page classification timeout')), 10000)
+      setTimeout(() => reject(new Error('Page classification timeout')), 3000)
     );
     
     const classificationPromise = hf.zeroShotClassification({
@@ -1207,7 +1398,7 @@ app.post('/test-scoring', async (req, res) => {
 });
 
 // API status endpoint
-app.get('/api-status', (req, res) => {
+app.get('/api-status', (_req, res) => {
   res.json({
     news_api: {
       configured: !!NEWS_API_KEY,
@@ -1227,7 +1418,7 @@ app.get('/api-status', (req, res) => {
 });
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
